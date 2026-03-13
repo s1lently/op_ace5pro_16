@@ -36,6 +36,7 @@ if [[ "$PLATFORM" == "arm64" ]]; then
         warn "arm64 AOSP Clang not found at $AOSP_CLANG_ARM64"
         log "Downloading from GitHub release..."
         curl -L "$AOSP_CLANG_ARM64_RELEASE" -o /tmp/aosp-clang.tar.gz
+        rm -rf "$HOME/aosp-clang-r510928" "$HOME/clang-kernel-only"
         tar xzf /tmp/aosp-clang.tar.gz -C "$HOME"
         mv "$HOME/clang-kernel-only" "$HOME/aosp-clang-r510928"
         log "Clang installed to $AOSP_CLANG_ARM64"
