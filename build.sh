@@ -79,11 +79,13 @@ sed -i 's/CONFIG_MODULE_SIG_PROTECT=y/# CONFIG_MODULE_SIG_PROTECT is not set/'  
 sed -i 's/CONFIG_MODULE_SCMVERSION=y/# CONFIG_MODULE_SCMVERSION is not set/'    "$OUT_DIR/.config"
 
 make -j"$JOBS" LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld \
+    HOSTCC=gcc HOSTCXX=g++ \
     PAHOLE="$PAHOLE_CMD" O=out olddefconfig
 
 # ── 编译 ──────────────────────────────────────────────────────
 log "Building kernel with $JOBS threads..."
 make -j"$JOBS" LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld \
+    HOSTCC=gcc HOSTCXX=g++ \
     PAHOLE="$PAHOLE_CMD" O=out all
 
 IMAGE="$OUT_DIR/arch/arm64/boot/Image"
