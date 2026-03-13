@@ -8,196 +8,154 @@
 - **Boot slot**: boot_b (A/B 分区)
 - **Root**: SukiSU (KernelSU), magiskboot 位于 `/data/adb/ksu/bin/magiskboot`
 
-## 编译环境
-- **主机**: Windows 11, i9-12900HX, 16GB RAM
-- **WSL**: Ubuntu 24.04 (虚拟磁盘在 E:\WSL\Ubuntu, 约 1TB)
-- **工具链**: AOSP Clang r510928 (build 11368308, +pgo +bolt +lto +mlgo)
+---
 
-## 最终成功的编译流程
+## 一键编译 (推荐)
+
+```bash
+# 1. 克隆完整源码树 (需要 repo 工具)
+mkdir kernel_workspace && cd kernel_workspace
+repo init -u https://github.com/HanKuCha/kernel_manifest.git \
+  -b refs/heads/oneplus/sm8750 \
+  -m JiuGeFaCai_oneplus_ace5_pro_v.xml --depth=1
+
+# 用 local_manifests 覆盖: common 换成此仓库, msm-kernel 换成 OxygenOS 16 分支
+mkdir -p .repo/local_manifests
+cat > .repo/local_manifests/custom.xml << 'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote fetch="https://github.com/s1lently" name="s1lently"/>
+  <remove-project name="android_kernel_common_oneplus_sm8750" />
+  <project remote="s1lently" name="op_ace5pro_16" path="kernel_platform/common" revision="main" clone-depth="1">
+    <linkfile dest="kernel_platform/.source_date_epoch_dir" src="."/>
+  </project>
+  <remove-project name="android_kernel_oneplus_sm8750" />
+  <project remote="origin" name="android_kernel_oneplus_sm8750" path="kernel_platform/msm-kernel" revision="oneplus/sm8750_b_16.0.0_oneplus_ace5_pro" clone-depth="1">
+    <linkfile dest="kernel_platform/WORKSPACE" src="bazel.WORKSPACE"/>
+    <linkfile dest="kernel_platform/build_with_bazel.py" src="build_with_bazel.py"/>
+  </project>
+  <remove-project name="android_kernel_modules_and_devicetree_oneplus_sm8750" />
+  <project remote="origin" name="android_kernel_modules_and_devicetree_oneplus_sm8750" path="./" revision="oneplus/sm8750_b_16.0.0_oneplus_ace5_pro" clone-depth="1"/>
+</manifest>
+XML
+
+repo sync -c -j$(nproc) --no-tags --force-sync
+
+# 2. 安装依赖
+sudo apt install -y build-essential bc flex bison libssl-dev libelf-dev \
+  dwarves cpio lz4 git curl wget python3
+
+# 3. 一键编译 (自动检测平台 + 下载工具链)
+cd kernel_platform/common
+bash build.sh
+
+# 4. 产出
+# out/arch/arm64/boot/Image
+```
+
+---
+
+## 编译环境
+
+### macOS arm64 (Apple Silicon + OrbStack) ✅ 已验证
+- OrbStack → Ubuntu 22.04 arm64 VM
+- 工具链: arm64 原生 AOSP Clang r510928
+  - 仓库: https://github.com/s1lently/llvm-project/releases/tag/r510928-arm64
+  - `build.sh` 自动下载，无需手动操作
+- 编译速度: ~5 分钟 (M 系列 Mac)
+
+### WSL2 / Linux x86_64 ✅ 已验证 (原始方案)
+- Ubuntu 24.04 推荐
+- 工具链: AOSP Clang r510928 (x86_64 prebuilt，通过 repo sync 自动获取)
+  - 路径: `kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/`
+  - 或手动下载: `https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android15-release/clang-r510928.tar.gz`
+
+---
+
+## 手动编译步骤
 
 ### 1. 安装依赖
 ```bash
-# WSL 中以 root 登录
-apt install -y build-essential bc flex bison libssl-dev libelf-dev lz4 \
-  libncurses-dev git curl wget zip unzip cpio rsync gcc-aarch64-linux-gnu \
-  binutils-aarch64-linux-gnu dwarves  # dwarves 提供 pahole, BTF 必需
+sudo apt install -y build-essential bc flex bison libssl-dev libelf-dev \
+  dwarves cpio lz4 git curl wget python3
 ```
 
-### 2. 用 repo sync 拉取完整源码树
+### 2. 配置
 ```bash
-# 安装 repo
-curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
-chmod a+x /usr/local/bin/repo
-git config --global user.email "build@local"
-git config --global user.name "build"
-
-# 初始化 (使用自定义 manifest, 见下文)
-mkdir -p /root/kernel_workspace && cd /root/kernel_workspace
-repo init -u <manifest_repo> -m ace5pro_16.xml
-repo sync -c -j4 --no-tags
-```
-
-manifest XML 需要包含以下关键仓库:
-- `android_kernel_common_oneplus_sm8750` → `kernel_platform/common` (分支: oneplus/sm8750_b_16.0.0_oneplus_ace5_pro)
-- `android_kernel_oneplus_sm8750` → `kernel_platform/msm-kernel` (同分支)
-- `android_kernel_modules_and_devicetree_oneplus_sm8750` → `./` (同分支)
-- AOSP prebuilts: clang, gcc, build-tools, kernel-build-tools, rust, dtc, mkbootimg 等
-
-最终目录结构:
-```
-kernel_workspace/
-├── kernel_platform/
-│   ├── common/          ← 通用内核源码 (编译在这里进行)
-│   ├── msm-kernel/      ← 高通平台代码 + vendor configs
-│   ├── oplus/           ← 一加私有代码
-│   ├── prebuilts/       ← 工具链 (clang, gcc, etc.)
-│   └── ...
-└── vendor/              ← vendor 模块和设备树
-```
-
-### 3. 获取原厂内核配置 (关键步骤!)
-```bash
-# 从原厂 stock boot.img 提取内嵌的 config
-# 不要用手机上 /proc/config.gz — 那是当前运行内核的配置, 可能已被修改
-cd /tmp
-python3 -c "
-import struct
-with open('/path/to/stock/boot.img', 'rb') as f:
-    f.seek(4096)  # boot header v4, kernel starts at page 1
-    kernel = f.read(36661760)  # KERNEL_SZ from magiskboot unpack
-    open('stock_kernel', 'wb').write(kernel)
-"
-/root/kernel_workspace/kernel_platform/common/scripts/extract-ikconfig stock_kernel > real_stock_config
-```
-
-### 4. 修改配置并编译
-```bash
-export PATH="/root/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH"
-cd /root/kernel_workspace/kernel_platform/common
+cd kernel_platform/common
 mkdir -p out
-cp /tmp/real_stock_config out/.config
+cp stock_defconfig out/.config
 
-# 必须修改的配置:
-# 1. 禁用 LOCALVERSION_AUTO (我们没有原版 git 历史)
+# 必须修改的 5 项配置
 sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' out/.config
-# 2. 手动设置 LOCALVERSION 匹配 stock vermagic
-sed -i 's/CONFIG_LOCALVERSION="-4k"/CONFIG_LOCALVERSION="-android15-8-o-4k"/' out/.config
-# 3. 禁用需要 abi_symbollist.raw 的配置
-sed -i 's/CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' out/.config
-sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d' out/.config
-# 4. 禁用模块签名保护 (需要签名基础设施)
-sed -i 's/CONFIG_MODULE_SIG_PROTECT=y/# CONFIG_MODULE_SIG_PROTECT is not set/' out/.config
-# 5. 禁用模块 SCM 版本
-sed -i 's/CONFIG_MODULE_SCMVERSION=y/# CONFIG_MODULE_SCMVERSION is not set/' out/.config
+sed -i 's/CONFIG_LOCALVERSION="-4k"/CONFIG_LOCALVERSION="-android15-8-o-4k"/'  out/.config
+sed -i 's/CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/'   out/.config
+sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d'                                        out/.config
+sed -i 's/CONFIG_MODULE_SIG_PROTECT=y/# CONFIG_MODULE_SIG_PROTECT is not set/'  out/.config
+sed -i 's/CONFIG_MODULE_SCMVERSION=y/# CONFIG_MODULE_SCMVERSION is not set/'    out/.config
 
-# 应用配置
-make -j6 LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-  CC=clang LD=ld.lld HOSTLD=ld.lld O=out olddefconfig
-
-# 编译
-make -j6 LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-  CC=clang LD=ld.lld HOSTLD=ld.lld O=out all
+make -j$(nproc) LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld O=out olddefconfig
 ```
 
-产出: `out/arch/arm64/boot/Image` (~36.4MB, stock 为 ~36.6MB)
-
-### 5. 打包 boot.img
+### 3. 编译
 ```bash
-# 在手机上用 magiskboot 操作 (需要 root)
-adb push stock_boot.img /sdcard/
-adb push Image /sdcard/
-adb shell "su -c '
-  mkdir -p /data/local/tmp/bootwork && cd /data/local/tmp/bootwork
-  cp /sdcard/stock_boot.img .
-  /data/adb/ksu/bin/magiskboot unpack stock_boot.img
-  cp /sdcard/Image kernel
-  /data/adb/ksu/bin/magiskboot repack stock_boot.img new_boot.img
-  cp new_boot.img /sdcard/
-'"
-adb pull /sdcard/new_boot.img
+# macOS arm64
+export PATH="$HOME/aosp-clang-r510928/bin:$PATH"
+
+# WSL x86_64
+export PATH="../../prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH"
+
+make -j$(nproc) LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld O=out all
+# 产出: out/arch/arm64/boot/Image (~35MB)
 ```
 
-### 6. 刷入
+### 4. 打包 boot.img
+```bash
+# 先备份当前分区
+adb shell "su -c 'dd if=/dev/block/by-name/boot_b of=/sdcard/boot_backup.img'"
+adb pull /sdcard/boot_backup.img
+
+# 解包 + 替换 kernel + 重新打包
+python3 kernel_platform/tools/mkbootimg/unpack_bootimg.py \
+  --boot_img boot_backup.img --out boot_unpack/
+cp out/arch/arm64/boot/Image boot_unpack/kernel
+python3 kernel_platform/tools/mkbootimg/mkbootimg.py \
+  --header_version 4 --kernel boot_unpack/kernel --ramdisk boot_unpack/ramdisk \
+  --output new_boot.img
+```
+
+### 5. 刷入
 ```bash
 adb reboot bootloader
 fastboot flash boot_b new_boot.img
 fastboot reboot
-```
 
-### 7. 恢复 (如果变砖)
-```bash
-# 进 fastboot (长按电源+音量下)
+# 恢复 (如果变砖)
 fastboot flash boot_b boot_backup.img
 fastboot reboot
 ```
 
 ---
 
-## Debug 历程 (踩坑记录)
+## 关键经验 (踩坑记录)
 
-### 尝试 1: 单独 clone + 系统 Clang 18 + gki_defconfig
-**结果**: 编译成功但刷入后砖
-**原因**:
-- 只 clone 了 `android_kernel_oneplus_sm8750` 一个仓库, 缺少 common 内核和 vendor 代码
-- 大量 oplus 私有目录是断裂的符号链接 (指向不存在的 vendor 路径)
-- 需要手动创建空的 Kconfig 和 Makefile stub 才能编译通过
-- 使用系统 Ubuntu Clang 18.1.3 而非 AOSP 特定版本
-- `fastboot boot` 临时启动在一加设备上不生效
+1. **必须用 repo sync 拉完整源码树** — 不能只 clone 一个仓库，oplus 私有代码和 vendor 配置需要完整树
+2. **必须从 stock_defconfig 开始** — 不要用 `/proc/config.gz`（已被 KSU 修改），不要用 `gki_defconfig`（缺 vendor 驱动）
+3. **5 项配置必须修改** — 否则编译失败或 Image 太小无法启动
+4. **vermagic 必须匹配** — `6.6.89-android15-8-o-4k`，LOCALVERSION_AUTO 必须关闭
+5. **pahole 版本要对** — v1.25（AOSP prebuilt）或 v1.31+（系统自带）均可，v1.25 经 qemu 可在 arm64 上跑
+6. **一加 `fastboot boot` 不生效** — 只能 `fastboot flash`，务必先备份
+7. **arm64 host 用 arm64 Clang** — 系统 Ubuntu Clang 18 能编过但启动失败，必须用 AOSP 同源的 Clang
 
-### 尝试 2: 正确 AOSP Clang + 手动 vermagic 匹配
-**结果**: 编译成功, vermagic 匹配, 仍然砖
-**原因**:
-- 下载了正确的 AOSP Clang r510928 (从 googlesource +archive 接口)
-- vermagic 字符串匹配了 (`6.6.89-android15-8-o-4k`)
-- 但 Image 只有 30MB, stock 是 35MB — 缺少大量驱动
-- 只用 gki_defconfig 编译, 没有 vendor 平台配置
+## 工具链
 
-### 尝试 3: repo sync 完整源码 + gki_defconfig
-**结果**: 砖
-**原因**:
-- 正确使用了 repo sync 拉取完整源码树 (common + msm-kernel + modules)
-- 但仍然只用 gki_defconfig, Image 依然 30MB
-- vendor config (sun_perf.config) 在 msm-kernel 目录下, 不在 common 里
+| 平台 | 工具链 | 来源 |
+|------|--------|------|
+| x86_64 | AOSP Clang r510928 (x86) | repo sync 自动获取 |
+| arm64 | AOSP Clang r510928 (arm64) | https://github.com/s1lently/llvm-project/releases/tag/r510928-arm64 |
 
-### 尝试 4: gki_defconfig + sun_perf.config 合并
-**结果**: 砖
-**原因**:
-- 合并了 vendor config, 但大多数驱动被编译为模块 (=m) 而非内置 (=y)
-- 配置和 stock 仍有较大差异
+arm64 版本从 `llvm-project@82e851a407` + llvm_android@32255e1 patches 编译而来。
 
-### 尝试 5: 从手机 /proc/config.gz 提取配置
-**结果**: 编译失败 → 修复后砖
-**原因**:
-- /proc/config.gz 是**当前运行内核**的配置, 不是原厂的
-- 手机已经刷了 KSU, 配置里包含 CONFIG_KSU=y, CONFIG_SUSFS=y 等
-- 缺少 `abi_symbollist.raw` 导致编译失败 (CONFIG_TRIM_UNUSED_KSYMS)
-- 禁用后编译通过, 但 Image 仍然只有 30MB (缺 BTF)
-
-### 尝试 6 (成功): 从原厂 boot.img 提取 ikconfig
-**结果**: 开机成功!
-**关键**:
-- 使用 `scripts/extract-ikconfig` 从原厂 stock boot.img 中的内核提取嵌入配置
-- 这才是**真正的原厂配置**, 包含 CONFIG_DEBUG_INFO_BTF=y (增加 ~5MB)
-- 包含 CONFIG_HMBIRD_SCHED=y (一加鸿鸟调度器)
-- 只需禁用 5 个需要特殊基础设施的配置项
-- Image 大小 36.4MB, 接近 stock 36.6MB
-- vermagic 完全匹配, 所有 vendor 模块正常加载
-
----
-
-## 关键经验总结
-
-1. **必须用 repo sync 拉完整源码树**, 不能单独 clone 一个仓库
-2. **必须从原厂 boot.img 提取 config** (extract-ikconfig), 不能用手机上的 /proc/config.gz
-3. **必须用 AOSP Clang r510928**, 从 `https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android15-release/clang-r510928.tar.gz` 下载, 或通过 repo sync 自动获取
-4. **必须安装 dwarves (pahole)** 以支持 CONFIG_DEBUG_INFO_BTF
-5. **vermagic 必须匹配** vendor_boot/vendor_dlkm 里的模块: `6.6.89-android15-8-o-4k`
-6. **LOCALVERSION_AUTO 必须关闭**, 手动设置 LOCALVERSION 为 `-android15-8-o-4k`
-7. **一加设备 fastboot boot 不生效**, 只能 fastboot flash, 务必先备份原始 boot 分区
-8. **刷入前备份**: `adb shell "su -c 'dd if=/dev/block/by-name/boot_b of=/sdcard/boot_backup.img'"`
-
-## 文件位置
-- WSL 源码: `/root/kernel_workspace/kernel_platform/common/`
-- WSL 产出: `/root/kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image`
-- AOSP Clang: `/root/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/`
-- Windows 工作目录: `E:\fuckVT\`
+## 文件说明
+- `stock_defconfig` — 从原厂 boot.img 用 `extract-ikconfig` 提取的原始配置
+- `build.sh` — 一键编译脚本，自动检测平台
