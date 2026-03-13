@@ -28,7 +28,7 @@ fi
 # ── 工具链路径 ────────────────────────────────────────────────
 CLANG_PREBUILT="$PLATFORM_DIR/prebuilts/clang/host/linux-x86/clang-r510928/bin"
 AOSP_CLANG_ARM64="$HOME/aosp-clang-r510928/bin"
-AOSP_CLANG_ARM64_RELEASE="https://github.com/s1lently/llvm-project/releases/download/r510928-arm64/aosp-clang-r510928-arm64.tar.gz"
+AOSP_CLANG_ARM64_RELEASE="https://github.com/s1lently/llvm-project/releases/download/r510928-arm64/aosp-clang-r510928-arm64-kernel.tar.gz"
 
 if [[ "$PLATFORM" == "arm64" ]]; then
     # macOS arm64 / OrbStack: 用我们编译的 arm64 原生 Clang
@@ -36,7 +36,9 @@ if [[ "$PLATFORM" == "arm64" ]]; then
         warn "arm64 AOSP Clang not found at $AOSP_CLANG_ARM64"
         log "Downloading from GitHub release..."
         mkdir -p "$HOME/aosp-clang-r510928"
-        curl -L "$AOSP_CLANG_ARM64_RELEASE" | tar xz -C "$HOME"
+        curl -L "$AOSP_CLANG_ARM64_RELEASE" -o /tmp/aosp-clang.tar.gz
+        tar xzf /tmp/aosp-clang.tar.gz -C "$HOME"
+        mv "$HOME/clang-kernel-only" "$HOME/aosp-clang-r510928" 2>/dev/null || true
         log "Clang installed to $AOSP_CLANG_ARM64"
     fi
     export PATH="$AOSP_CLANG_ARM64:$PATH"
