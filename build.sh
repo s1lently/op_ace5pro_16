@@ -78,15 +78,20 @@ sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d'                                       
 sed -i 's/CONFIG_MODULE_SIG_PROTECT=y/# CONFIG_MODULE_SIG_PROTECT is not set/'  "$OUT_DIR/.config"
 sed -i 's/CONFIG_MODULE_SCMVERSION=y/# CONFIG_MODULE_SCMVERSION is not set/'    "$OUT_DIR/.config"
 
+# arm64 kernel-only clang 缺 host headers, 必须用系统 gcc 编译 host 工具
+if [[ "$PLATFORM" == "arm64" ]]; then
+    HOST_OPTS="HOSTCC=gcc HOSTCXX=g++"
+else
+    HOST_OPTS=""
+fi
+
 make -j"$JOBS" LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld \
-    HOSTCC=gcc HOSTCXX=g++ \
-    PAHOLE="$PAHOLE_CMD" O=out olddefconfig
+    $HOST_OPTS PAHOLE="$PAHOLE_CMD" O=out olddefconfig
 
 # ── 编译 ──────────────────────────────────────────────────────
 log "Building kernel with $JOBS threads..."
 make -j"$JOBS" LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld \
-    HOSTCC=gcc HOSTCXX=g++ \
-    PAHOLE="$PAHOLE_CMD" O=out all
+    $HOST_OPTS PAHOLE="$PAHOLE_CMD" O=out all
 
 IMAGE="$OUT_DIR/arch/arm64/boot/Image"
 [[ -f "$IMAGE" ]] || die "Build failed: Image not generated"
