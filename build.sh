@@ -38,9 +38,13 @@ fi
 
 # ── 依赖检查 ──────────────────────────────────────────────────
 MISSING=()
-for cmd in make bc flex bison cpio pahole gcc g++; do
+for cmd in make bc flex bison cpio gcc g++ curl; do
     command -v $cmd &>/dev/null || MISSING+=("$cmd")
 done
+# pahole: verify it actually works (not a stale wrapper)
+if ! pahole --version &>/dev/null; then
+    MISSING+=("pahole")
+fi
 if [[ ${#MISSING[@]} -gt 0 ]]; then
     log "Installing missing dependencies: ${MISSING[*]}"
     if command -v apt-get &>/dev/null; then
